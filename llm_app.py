@@ -4,9 +4,17 @@ import os
 from dotenv import load_dotenv
 from openai import AzureOpenAI
 
+# Load environment variables from .env file (for local development)
 load_dotenv()
 
+# Get API key from environment variables
+# This works both locally (.env file) and in production (GitHub Secrets/Streamlit Secrets)
 open_api_key = os.getenv("OPEN_AI_KEY")
+
+# Validate that API key is available
+if not open_api_key:
+    st.error("❌ API key not found. Please check your environment variables.")
+    st.stop()
 model_name = "gpt-4o-mini"
 
 client = AzureOpenAI(
@@ -30,6 +38,9 @@ SYSTEM_PROMPT = DEFAULT_SYSTEM_PROMPT
 
 # Define which conditions have reasoning
 CONDITIONS_WITH_REASONING = ["A1", "A2"]
+
+# Configuration: Set to True to prevent new input while response is streaming
+BLOCK_INPUT_DURING_STREAMING = True
 
 if condition == "A1":
     SYSTEM_PROMPT = (
@@ -85,6 +96,10 @@ st.caption(APP_CAPTION)
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# Initialize streaming state
+if "is_streaming" not in st.session_state:
+    st.session_state.is_streaming = False
+
 # Display chat messages from history
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
@@ -96,22 +111,58 @@ for message in st.session_state.messages:
                 reasoning_part = parts[0].replace("REASONING:", "").strip()
                 answer_part = parts[1].strip()
                 
-                # Display reasoning in an expander (collapsed for history)
-                with st.expander("💭 Explanation", expanded=False):
-                    st.markdown(reasoning_part)
-                
-                # Display the main answer
-                st.markdown(answer_part)
+                # Check if sources section exists
+                if "### Sources:" in answer_part:
+                    answer_sections = answer_part.split("### Sources:", 1)
+                    main_answer = answer_sections[0].strip()
+                    sources_section = answer_sections[1].strip()
+                    
+                    # Display reasoning in an expander (collapsed for history)
+                    with st.expander("💭 Explanation", expanded=False):
+                        st.markdown(reasoning_part)
+                    
+                    # Display the main answer
+                    st.markdown(main_answer)
+                    
+                    # Display sources in an expander (collapsed for history)
+                    with st.expander("📚 Sources", expanded=False):
+                        st.markdown(sources_section)
+                else:
+                    # Display reasoning in an expander (collapsed for history)
+                    with st.expander("💭 Explanation", expanded=False):
+                        st.markdown(reasoning_part)
+                    
+                    # Display the main answer
+                    st.markdown(answer_part)
             else:
                 # Fallback if no reasoning structure found
+                st.markdown(content)
+        elif message["role"] == "assistant" and condition in ["A3"]:
+            # Handle A3 condition (citations only, no reasoning)
+            content = message["content"]
+            if "### Sources:" in content:
+                content_sections = content.split("### Sources:", 1)
+                main_answer = content_sections[0].strip()
+                sources_section = content_sections[1].strip()
+                
+                # Display the main answer
+                st.markdown(main_answer)
+                
+                # Display sources in an expander (collapsed for history)
+                with st.expander("📚 Sources", expanded=False):
+                    st.markdown(sources_section)
+            else:
                 st.markdown(content)
         else:
             st.markdown(message["content"])
 
 # Accept user input
-if prompt := st.chat_input("What would you like to know?"):
+if prompt := st.chat_input("How can I help you?", disabled=BLOCK_INPUT_DURING_STREAMING and st.session_state.is_streaming):
     # Add user message to chat history
     st.session_state.messages.append({"role": "user", "content": prompt})
+    
+    # Set streaming state
+    st.session_state.is_streaming = True
     
     # Display user message
     with st.chat_message("user"):
@@ -137,9 +188,12 @@ if prompt := st.chat_input("What would you like to know?"):
             full_response = ""
             reasoning_complete = False
             answer_started = False
+            sources_started = False
             reasoning_placeholder = None
             answer_placeholder = None
+            sources_placeholder = None
             expander = None
+            sources_expander = None
             
             # Check if this condition has reasoning
             if condition in CONDITIONS_WITH_REASONING:
@@ -148,21 +202,54 @@ if prompt := st.chat_input("What would you like to know?"):
                 reasoning_placeholder = expander.empty()
                 answer_placeholder = st.empty()
                 
+                # Check if this condition has citations (A1)
+                if condition == "A1":
+                    sources_expander = st.expander("📚 Sources", expanded=False)
+                    sources_placeholder = sources_expander.empty()
+                
                 displayed_reasoning = ""
                 displayed_answer = ""
+                displayed_sources = ""
                 
                 for chunk in response:
                     if chunk.choices and chunk.choices[0].delta.content is not None:
                         chunk_content = chunk.choices[0].delta.content
                         full_response += chunk_content
                         
+                        # Check if we've hit the Sources marker
+                        if "### Sources:" in full_response and not sources_started and condition == "A1":
+                            # Split at Sources marker
+                            parts = full_response.split("### Sources:", 1)
+                            pre_sources = parts[0]
+                            sources_part = parts[1]
+                            
+                            # Handle reasoning and answer sections
+                            if "ANSWER:" in pre_sources:
+                                answer_sections = pre_sources.split("ANSWER:", 1)
+                                reasoning_part = answer_sections[0].replace("REASONING:", "").strip()
+                                answer_part = answer_sections[1].strip()
+                                
+                                # Finalize reasoning and answer display
+                                reasoning_placeholder.markdown(reasoning_part)
+                                answer_placeholder.markdown(answer_part)
+                            
+                            sources_started = True
+                            displayed_sources = sources_part
+                            sources_placeholder.markdown(displayed_sources + "▌")
+                            
+                        elif sources_started and condition == "A1":
+                            # Continue streaming the sources
+                            displayed_sources += chunk_content
+                            sources_placeholder.markdown(displayed_sources + "▌")
+                            
                         # Check if we've hit the ANSWER: marker
-                        if "ANSWER:" in full_response and not answer_started:
+                        elif "ANSWER:" in full_response and not answer_started:
                             # Split at ANSWER: marker
                             parts = full_response.split("ANSWER:", 1)
                             reasoning_part = parts[0].replace("REASONING:", "").strip()
                             answer_part = parts[1]
-                              # Finalize reasoning display
+                            
+                            # Finalize reasoning display
                             reasoning_placeholder.markdown(reasoning_part)
                             reasoning_complete = True
                             answer_started = True
@@ -184,7 +271,7 @@ if prompt := st.chat_input("What would you like to know?"):
                             displayed_answer = answer_part
                             answer_placeholder.markdown(displayed_answer + "▌")
                             
-                        elif answer_started:
+                        elif answer_started and not sources_started:
                             # Continue streaming the answer
                             displayed_answer += chunk_content
                             answer_placeholder.markdown(displayed_answer + "▌")
@@ -197,15 +284,63 @@ if prompt := st.chat_input("What would you like to know?"):
                         
                         time.sleep(0.05)
                 
-                # Remove final cursor
-                if answer_started:
+                # Remove final cursors
+                if sources_started and condition == "A1":
+                    sources_placeholder.markdown(displayed_sources)
+                elif answer_started:
                     answer_placeholder.markdown(displayed_answer)
                 elif reasoning_placeholder:
                     reasoning_text = full_response.replace("REASONING:", "").strip()
                     reasoning_placeholder.markdown(reasoning_text)
                     
+            elif condition == "A3":
+                # For A3 condition (citations only, no reasoning)
+                answer_placeholder = st.empty()
+                sources_expander = st.expander("📚 Sources", expanded=False)
+                sources_placeholder = sources_expander.empty()
+                
+                displayed_answer = ""
+                displayed_sources = ""
+                sources_started = False
+                
+                for chunk in response:
+                    if chunk.choices and chunk.choices[0].delta.content is not None:
+                        chunk_content = chunk.choices[0].delta.content
+                        full_response += chunk_content
+                        
+                        # Check if we've hit the Sources marker
+                        if "### Sources:" in full_response and not sources_started:
+                            # Split at Sources marker
+                            parts = full_response.split("### Sources:", 1)
+                            answer_part = parts[0].strip()
+                            sources_part = parts[1]
+                            
+                            # Finalize answer display
+                            answer_placeholder.markdown(answer_part)
+                            sources_started = True
+                            displayed_sources = sources_part
+                            sources_placeholder.markdown(displayed_sources + "▌")
+                            
+                        elif sources_started:
+                            # Continue streaming the sources
+                            displayed_sources += chunk_content
+                            sources_placeholder.markdown(displayed_sources + "▌")
+                            
+                        else:
+                            # Continue streaming the answer
+                            displayed_answer += chunk_content
+                            answer_placeholder.markdown(displayed_answer + "▌")
+                        
+                        time.sleep(0.03)
+                
+                # Remove final cursors
+                if sources_started:
+                    sources_placeholder.markdown(displayed_sources)
+                else:
+                    answer_placeholder.markdown(displayed_answer)
+                    
             else:
-                # For conditions without reasoning, stream normally
+                # For conditions without reasoning or citations, stream normally
                 response_placeholder = st.empty()
                 
                 for chunk in response:
@@ -216,8 +351,11 @@ if prompt := st.chat_input("What would you like to know?"):
                 
                 # Remove final cursor
                 response_placeholder.markdown(full_response)
-              # Add assistant response to chat history
+                # Add assistant response to chat history
             st.session_state.messages.append({"role": "assistant", "content": full_response})
             
         except Exception as e:
             st.error(f"An error occurred: {e}")
+        finally:
+            # Reset streaming state
+            st.session_state.is_streaming = False

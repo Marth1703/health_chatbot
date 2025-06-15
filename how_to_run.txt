@@ -1,0 +1,3 @@
+streamlit run llm_app.py
+
+http://localhost:8501/?cond=A1
