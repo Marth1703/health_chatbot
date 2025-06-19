@@ -3,13 +3,17 @@ import time
 import os
 from dotenv import load_dotenv
 from openai import AzureOpenAI
+import json
+from datetime import datetime
+import secrets
+from supabase import create_client, Client
 
-# Load environment variables from .env file (for local development)
 load_dotenv()
 
-# Get API key from environment variables
-# This works both locally (.env file) and in production (GitHub Secrets/Streamlit Secrets)
 open_api_key = os.getenv("OPEN_AI_KEY")
+url: str = os.environ.get("SUPABASE_URL")
+key: str = os.environ.get("SUPABASE_KEY")
+supabase: Client = create_client(url, key)
 
 # Validate that API key is available
 if not open_api_key:
@@ -30,17 +34,18 @@ try:
     condition = query_params.get("cond")
 except AttributeError:
     query_params = st.experimental_get_query_params()
-    condition = query_params.get("cond", [None])[0] # .get() on dict returns list
+    condition = query_params.get("cond", [None])[0]
 
 APP_TITLE = "Mental Health Assistant 💙"
 APP_CAPTION = "This assistant will help you with mental health-related queries."
 SYSTEM_PROMPT = DEFAULT_SYSTEM_PROMPT
 
-# Define which conditions have reasoning
 CONDITIONS_WITH_REASONING = ["A1", "A2"]
 
-# Configuration: Set to True to prevent new input while response is streaming
 BLOCK_INPUT_DURING_STREAMING = True
+
+# Configuration: Set to True to save conversations locally to files
+SAVE_CONVERSATIONS_LOCALLY = False
 
 if condition == "A1":
     SYSTEM_PROMPT = (
@@ -100,6 +105,62 @@ if "messages" not in st.session_state:
 if "is_streaming" not in st.session_state:
     st.session_state.is_streaming = False
 
+# Initialize app state
+if "app_state" not in st.session_state:
+    st.session_state.app_state = "start"  # start, chat, end
+
+# START SCREEN
+if st.session_state.app_state == "start":
+    st.markdown("""
+    <div style="text-align: center; padding: 2rem 0;">
+        <p style="font-size: 1.2rem; margin: 2rem 0;">
+            Welcome to your personal mental health assistant. This AI-powered tool is here to provide support and
+            guidance for your mental wellbeing.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Center the start button
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("🚀 Start Chat Session", type="primary", use_container_width=True):
+            st.session_state.app_state = "chat"
+            st.rerun()
+    
+    st.stop()
+
+# END SCREEN
+elif st.session_state.app_state == "end":
+    # Save conversation to file
+    if st.session_state.get("messages"):
+        # Save locally if enabled
+        if SAVE_CONVERSATIONS_LOCALLY:
+            os.makedirs("conversations", exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            rand_suffix = secrets.token_hex(3)  # 6 hex digits
+            filename = f"conversations/conversation_{timestamp}_{rand_suffix}.json"
+            with open(filename, "w", encoding="utf-8") as f:
+                json.dump(st.session_state["messages"], f, ensure_ascii=False, indent=2)
+        
+        # Save to Supabase
+        response = (supabase.table("conversations").insert({"conversation": st.session_state["messages"]}).execute())
+
+    st.markdown("""
+    <div style="text-align: center; padding: 2rem 0;">
+        <h1>✨ Thank You! ✨</h1>
+        <p style="font-size: 1.2rem; margin: 2rem 0;">
+            Your chat session has ended. We hope this conversation was helpful for you.
+        </p>
+        <p style="font-size: 0.9rem; color: #888; margin-top: 2rem;">
+            Take care of yourself! 💙
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.stop()
+
+# CHAT INTERFACE (existing code continues here)
+
 # Display chat messages from history
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
@@ -152,9 +213,14 @@ for message in st.session_state.messages:
                 with st.expander("📚 Sources", expanded=False):
                     st.markdown(sources_section)
             else:
-                st.markdown(content)
-        else:
-            st.markdown(message["content"])
+                st.markdown(content)        
+
+# Add End Chat button in sidebar
+with st.sidebar:
+    st.markdown("---")
+    if st.button("🔚 End Chat Session", type="secondary", use_container_width=True):
+        st.session_state.app_state = "end"
+        st.rerun()
 
 # Accept user input
 if prompt := st.chat_input("How can I help you?", disabled=BLOCK_INPUT_DURING_STREAMING and st.session_state.is_streaming):
@@ -169,8 +235,6 @@ if prompt := st.chat_input("How can I help you?", disabled=BLOCK_INPUT_DURING_ST
         st.markdown(prompt)    # Generate assistant response
     with st.chat_message("assistant"):
         try:
-            # Create the messages list for the API call
-            # Prepend the system message
             api_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
             # Add existing user and assistant messages
             api_messages.extend([{"role": m["role"], "content": m["content"]} for m in st.session_state.messages])
@@ -325,7 +389,7 @@ if prompt := st.chat_input("How can I help you?", disabled=BLOCK_INPUT_DURING_ST
                             # Continue streaming the sources
                             displayed_sources += chunk_content
                             sources_placeholder.markdown(displayed_sources + "▌")
-                            
+                        
                         else:
                             # Continue streaming the answer
                             displayed_answer += chunk_content
