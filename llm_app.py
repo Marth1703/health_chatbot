@@ -115,7 +115,7 @@ if st.session_state.app_state == "start":
     <div style="text-align: center; padding: 2rem 0;">
         <p style="font-size: 1.2rem; margin: 2rem 0;">
             Welcome to your personal mental health assistant. This AI-powered tool is here to provide support and
-            guidance for your mental wellbeing.
+            guidance for your mental wellbeing. Once you are done, please click the "End Chat Session" botton in the sidebar.
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -207,9 +207,7 @@ for message in st.session_state.messages:
                 sources_section = content_sections[1].strip()
                 
                 # Display the main answer
-                st.markdown(main_answer)
-                
-                # Display sources in an expander (collapsed for history)
+                st.markdown(main_answer)                # Display sources in an expander (collapsed for history)
                 with st.expander("📚 Sources", expanded=False):
                     st.markdown(sources_section)
             else:
@@ -258,18 +256,16 @@ if prompt := st.chat_input("How can I help you?", disabled=BLOCK_INPUT_DURING_ST
             sources_placeholder = None
             expander = None
             sources_expander = None
-            
-            # Check if this condition has reasoning
+              # Check if this condition has reasoning
             if condition in CONDITIONS_WITH_REASONING:
                 # Create the expander for reasoning upfront
                 expander = st.expander("💭 Explanation", expanded=True)
                 reasoning_placeholder = expander.empty()
                 answer_placeholder = st.empty()
                 
-                # Check if this condition has citations (A1)
-                if condition == "A1":
-                    sources_expander = st.expander("📚 Sources", expanded=False)
-                    sources_placeholder = sources_expander.empty()
+                # Don't create sources expander yet - will create after streaming completes
+                sources_expander = None
+                sources_placeholder = None
                 
                 displayed_reasoning = ""
                 displayed_answer = ""
@@ -278,9 +274,7 @@ if prompt := st.chat_input("How can I help you?", disabled=BLOCK_INPUT_DURING_ST
                 for chunk in response:
                     if chunk.choices and chunk.choices[0].delta.content is not None:
                         chunk_content = chunk.choices[0].delta.content
-                        full_response += chunk_content
-                        
-                        # Check if we've hit the Sources marker
+                        full_response += chunk_content                        # Check if we've hit the Sources marker
                         if "### Sources:" in full_response and not sources_started and condition == "A1":
                             # Split at Sources marker
                             parts = full_response.split("### Sources:", 1)
@@ -297,14 +291,18 @@ if prompt := st.chat_input("How can I help you?", disabled=BLOCK_INPUT_DURING_ST
                                 reasoning_placeholder.markdown(reasoning_part)
                                 answer_placeholder.markdown(answer_part)
                             
+                            # Create sources expander immediately when sources section starts
+                            sources_expander = st.expander("📚 Sources", expanded=False)
+                            sources_placeholder = sources_expander.empty()
                             sources_started = True
                             displayed_sources = sources_part
-                            sources_placeholder.markdown(displayed_sources + "▌")
+                            # Display current sources content (even if incomplete)
+                            sources_placeholder.markdown(displayed_sources)
                             
                         elif sources_started and condition == "A1":
-                            # Continue streaming the sources
+                            # Continue collecting the sources and update display
                             displayed_sources += chunk_content
-                            sources_placeholder.markdown(displayed_sources + "▌")
+                            sources_placeholder.markdown(displayed_sources)
                             
                         # Check if we've hit the ANSWER: marker
                         elif "ANSWER:" in full_response and not answer_started:
@@ -346,10 +344,9 @@ if prompt := st.chat_input("How can I help you?", disabled=BLOCK_INPUT_DURING_ST
                                 reasoning_text = full_response.replace("REASONING:", "").strip()
                                 reasoning_placeholder.markdown(reasoning_text + "▌")
                         
-                        time.sleep(0.05)
-                
-                # Remove final cursors
+                        time.sleep(0.05)                # Remove final cursors
                 if sources_started and condition == "A1":
+                    # Sources expander already created, just remove cursor from final display
                     sources_placeholder.markdown(displayed_sources)
                 elif answer_started:
                     answer_placeholder.markdown(displayed_answer)
@@ -360,8 +357,9 @@ if prompt := st.chat_input("How can I help you?", disabled=BLOCK_INPUT_DURING_ST
             elif condition == "A3":
                 # For A3 condition (citations only, no reasoning)
                 answer_placeholder = st.empty()
-                sources_expander = st.expander("📚 Sources", expanded=False)
-                sources_placeholder = sources_expander.empty()
+                # Don't create sources expander yet - will create after streaming completes
+                sources_expander = None
+                sources_placeholder = None
                 
                 displayed_answer = ""
                 displayed_sources = ""
@@ -370,9 +368,7 @@ if prompt := st.chat_input("How can I help you?", disabled=BLOCK_INPUT_DURING_ST
                 for chunk in response:
                     if chunk.choices and chunk.choices[0].delta.content is not None:
                         chunk_content = chunk.choices[0].delta.content
-                        full_response += chunk_content
-                        
-                        # Check if we've hit the Sources marker
+                        full_response += chunk_content                        # Check if we've hit the Sources marker
                         if "### Sources:" in full_response and not sources_started:
                             # Split at Sources marker
                             parts = full_response.split("### Sources:", 1)
@@ -381,24 +377,28 @@ if prompt := st.chat_input("How can I help you?", disabled=BLOCK_INPUT_DURING_ST
                             
                             # Finalize answer display
                             answer_placeholder.markdown(answer_part)
+                            
+                            # Create sources expander immediately when sources section starts
+                            sources_expander = st.expander("📚 Sources", expanded=False)
+                            sources_placeholder = sources_expander.empty()
                             sources_started = True
                             displayed_sources = sources_part
-                            sources_placeholder.markdown(displayed_sources + "▌")
+                            # Display current sources content (even if incomplete)
+                            sources_placeholder.markdown(displayed_sources)
                             
                         elif sources_started:
-                            # Continue streaming the sources
+                            # Continue collecting the sources and update display
                             displayed_sources += chunk_content
-                            sources_placeholder.markdown(displayed_sources + "▌")
+                            sources_placeholder.markdown(displayed_sources)
                         
                         else:
                             # Continue streaming the answer
                             displayed_answer += chunk_content
                             answer_placeholder.markdown(displayed_answer + "▌")
                         
-                        time.sleep(0.03)
-                
-                # Remove final cursors
+                        time.sleep(0.03)                # Remove final cursors
                 if sources_started:
+                    # Sources expander already created, just remove cursor from final display
                     sources_placeholder.markdown(displayed_sources)
                 else:
                     answer_placeholder.markdown(displayed_answer)
@@ -412,10 +412,9 @@ if prompt := st.chat_input("How can I help you?", disabled=BLOCK_INPUT_DURING_ST
                         full_response += chunk.choices[0].delta.content
                         response_placeholder.markdown(full_response + "▌")
                         time.sleep(0.03)
-                
-                # Remove final cursor
+                  # Remove final cursor
                 response_placeholder.markdown(full_response)
-                # Add assistant response to chat history
+            # Add assistant response to chat history
             st.session_state.messages.append({"role": "assistant", "content": full_response})
             
         except Exception as e:
